@@ -1,0 +1,66 @@
+
+name: Sign Salehabad APK for Release
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-to-sign.apk'
+      - '.github/workflows/release-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build tools
+        run: sdkmanager "build-tools;35.0.0"
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          test -s "$RUNNER_TEMP/release.jks"
+
+      - name: Sign APK
+        env:
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s app-to-sign.apk
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+
+          zipalign -f -v 4 app-to-sign.apk "$RUNNER_TEMP/aligned.apk"
+
+          apksigner sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:STORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out salehabad-man-release.apk \
+            "$RUNNER_TEMP/aligned.apk"
+
+          apksigner verify --verbose salehabad-man-release.apk
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: salehabad-man-release-apk
+          path: salehabad-man-release.apk
+          if-no-files-found: error
