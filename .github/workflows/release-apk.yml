@@ -1,0 +1,59 @@
+name: Sign Salehabad APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'release-apk.yml'
+      - 'app-to-sign.apk'
+      - '.github/workflows/release-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find Android signing tools
+        id: tools
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT="$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$BT/apksigner"
+          echo "apksigner=$BT/apksigner" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          test -s "$RUNNER_TEMP/release.jks"
+
+      - name: Sign APK
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          "${{ steps.tools.outputs.apksigner }}" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out app-signed.apk \
+            app-to-sign.apk
+
+          "${{ steps.tools.outputs.apksigner }}" verify --verbose app-signed.apk
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: salehabad-man-signed-apk
+          path: app-signed.apk
