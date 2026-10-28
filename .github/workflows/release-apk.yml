@@ -1,0 +1,99 @@
+
+name: Sign Salehabad APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-to-sign.apk'
+      - '.github/workflows/release-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Sign Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find Android signing tools
+        id: tools
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT="$(find "$SDK/build-tools" \
+            -mindepth 1 -maxdepth 1 -type d \
+            | sort -V | tail -n 1)"
+
+          if [ -z "$BT" ] || [ ! -x "$BT/apksigner" ]; then
+            echo "Android apksigner was not found."
+            exit 1
+          fi
+
+          echo "apksigner=$BT/apksigner" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare and validate signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "Required signing secrets are missing."
+            exit 1
+          fi
+
+          printf '%s' "$KEYSTORE_BASE64" \
+            | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+          test -s "$RUNNER_TEMP/release.jks"
+
+          echo "Keystore size: $(wc -c < "$RUNNER_TEMP/release.jks") bytes"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/release.jks" \
+            -storepass "$KEYSTORE_PASSWORD"
+
+      - name: Check input APK
+        shell: bash
+        run: |
+          if [ ! -s app-to-sign.apk ]; then
+            echo "app-to-sign.apk is missing or empty."
+            exit 1
+          fi
+
+      - name: Sign APK
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          "${{ steps.tools.outputs.apksigner }}" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$RUNNER_TEMP/app-signed.apk" \
+            app-to-sign.apk
+
+          "${{ steps.tools.outputs.apksigner }}" verify \
+            --verbose "$RUNNER_TEMP/app-signed.apk"
+
+          cp "$RUNNER_TEMP/app-signed.apk" app-signed.apk
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: salehabad-man-signed-apk
+          path: app-signed.apk
+          if-no-files-found: error
+          retention-days: 7
